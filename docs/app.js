@@ -367,12 +367,12 @@ function renderMainContent(child, phase) {
           .join("")}
       </select>
     </section>
-    <section class="child-header status-filter-header">
-      <label>表示</label>
-      <select id="status-filter-select">
-        ${STATUS_FILTERS.map(
-          (item) => `<option value="${item.value}" ${state.statusFilter === item.value ? "selected" : ""}>${item.label}</option>`,
-        ).join("")}
+    <section class="status-filter-panel">
+      <label for="status-filter-select">状態</label>
+      <select id="status-filter-select" aria-label="状態フィルタ">
+        ${STATUS_FILTERS.map((item) => (
+          `<option value="${item.value}" ${state.statusFilter === item.value ? "selected" : ""}>${item.label}</option>`
+        )).join("")}
       </select>
     </section>
     <div class="phase-title">${phase ? escapeHtml(phase.age_label) + "（" + escapeHtml(phase.name) + "）" : ""}</div>

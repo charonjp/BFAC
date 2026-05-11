@@ -226,8 +226,33 @@ button {
   font-weight: 800;
 }
 
-.status-filter-header select {
+.status-filter-panel {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin: -2px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.status-filter-panel label {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.status-filter-panel select {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--text);
+  padding: 8px 10px;
   font-size: 1rem;
+  font-weight: 800;
 }
 
 .phase-title {
