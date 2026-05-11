@@ -226,6 +226,10 @@ button {
   font-weight: 800;
 }
 
+.status-filter-header select {
+  font-size: 1rem;
+}
+
 .phase-title {
   margin: 8px 0 10px;
   color: var(--primary);

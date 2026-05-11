@@ -17,9 +17,17 @@ const ATTEMPTS = {
     label: "2回目",
   },
 };
+const STATUS_FILTERS = [
+  { value: "", label: "すべて" },
+  { value: "none", label: "未実施" },
+  { value: "first", label: "1回完了" },
+  { value: "second", label: "2回完了" },
+];
 
 let supabaseClient = null;
 let touchGesture = null;
+let horizontalScrollGesture = null;
+let suppressHorizontalClick = false;
 
 const state = {
   session: null,
@@ -34,6 +42,7 @@ const state = {
   selectedChildId: null,
   phaseIndex: 0,
   categoryFilter: "",
+  statusFilter: "",
   search: "",
   view: "main",
   settingsSection: "menu",
@@ -93,6 +102,7 @@ function resetState() {
   state.selectedChildId = null;
   state.phaseIndex = 0;
   state.categoryFilter = "";
+  state.statusFilter = "";
   state.search = "";
   state.view = "main";
   state.settingsSection = "menu";
@@ -242,6 +252,8 @@ function clearAppHandlers() {
   app.ontouchstart = null;
   app.ontouchend = null;
   touchGesture = null;
+  horizontalScrollGesture = null;
+  suppressHorizontalClick = false;
 }
 
 function runAsync(task) {
@@ -355,6 +367,14 @@ function renderMainContent(child, phase) {
           .join("")}
       </select>
     </section>
+    <section class="child-header status-filter-header">
+      <label>表示</label>
+      <select id="status-filter-select">
+        ${STATUS_FILTERS.map(
+          (item) => `<option value="${item.value}" ${state.statusFilter === item.value ? "selected" : ""}>${item.label}</option>`,
+        ).join("")}
+      </select>
+    </section>
     <div class="phase-title">${phase ? escapeHtml(phase.age_label) + "（" + escapeHtml(phase.name) + "）" : ""}</div>
     <nav class="tabs" aria-label="期">
       ${state.phases
@@ -399,15 +419,24 @@ function bindMainEvents() {
       render();
     });
   });
+  document.querySelector("#status-filter-select")?.addEventListener("change", (event) => {
+    state.statusFilter = event.target.value;
+    updateRecordList();
+  });
   document.querySelector("#search-input")?.addEventListener("input", (event) => {
     state.search = event.target.value;
-    const child = selectedChild();
-    const list = document.querySelector("#record-list");
-    if (child && list) list.innerHTML = renderRecordList(filteredFoodsForChild(child));
+    updateRecordList();
   });
 
   app.onclick = handleAppClick;
-  app.ontouchstart = (event) => {
+  bindHorizontalScrollGuards();
+  bindPhaseSwipe();
+}
+
+function bindPhaseSwipe() {
+  const recordList = document.querySelector("#record-list");
+  if (!recordList) return;
+  recordList.ontouchstart = (event) => {
     const touch = event.changedTouches[0];
     touchGesture = {
       x: touch.clientX,
@@ -415,7 +444,7 @@ function bindMainEvents() {
       ignorePhaseSwipe: shouldIgnorePhaseSwipe(event.target),
     };
   };
-  app.ontouchend = (event) => {
+  recordList.ontouchend = (event) => {
     if (!touchGesture) return;
     if (touchGesture.ignorePhaseSwipe) {
       touchGesture = null;
@@ -430,11 +459,66 @@ function bindMainEvents() {
       else changePhase(-1);
     }
   };
+  recordList.ontouchcancel = () => {
+    touchGesture = null;
+  };
+}
+
+function bindHorizontalScrollGuards() {
+  document.querySelectorAll(".chips, .tabs").forEach((scroller) => {
+    scroller.addEventListener("touchstart", (event) => {
+      const touch = event.changedTouches[0];
+      horizontalScrollGesture = {
+        x: touch.clientX,
+        y: touch.clientY,
+        moved: false,
+      };
+    }, { passive: true });
+    scroller.addEventListener("touchmove", (event) => {
+      if (!horizontalScrollGesture) return;
+      const touch = event.changedTouches[0];
+      const diffX = touch.clientX - horizontalScrollGesture.x;
+      const diffY = touch.clientY - horizontalScrollGesture.y;
+      if (Math.abs(diffX) > 10 && Math.abs(diffX) > Math.abs(diffY)) {
+        horizontalScrollGesture.moved = true;
+      }
+    }, { passive: true });
+    scroller.addEventListener("touchend", () => {
+      if (horizontalScrollGesture?.moved) {
+        suppressHorizontalClick = true;
+        window.setTimeout(() => {
+          suppressHorizontalClick = false;
+        }, 360);
+      }
+      horizontalScrollGesture = null;
+    }, { passive: true });
+    scroller.addEventListener("touchcancel", () => {
+      horizontalScrollGesture = null;
+    }, { passive: true });
+  });
+}
+
+function updateRecordList() {
+  const child = selectedChild();
+  const list = document.querySelector("#record-list");
+  if (child && list) list.innerHTML = renderRecordList(filteredFoodsForChild(child));
+}
+
+function updateCategoryChips() {
+  document.querySelectorAll(".chips .chip").forEach((chip) => {
+    chip.classList.toggle("active", (chip.dataset.code || "") === state.categoryFilter);
+  });
 }
 
 function handleAppClick(event) {
   const button = event.target.closest("[data-action]");
   if (!button) return;
+  if (suppressHorizontalClick && button.closest(".chips, .tabs")) {
+    event.preventDefault();
+    event.stopPropagation();
+    suppressHorizontalClick = false;
+    return;
+  }
   const action = button.dataset.action;
   runAsync(async () => {
     if (action === "settings") {
@@ -452,7 +536,8 @@ function handleAppClick(event) {
       render();
     } else if (action === "category") {
       state.categoryFilter = button.dataset.code || "";
-      render();
+      updateCategoryChips();
+      updateRecordList();
     } else if (action === "edit-date") {
       openDateModal(button.dataset.foodId, Number(button.dataset.attempt));
     } else if (action === "edit-memo") {
@@ -466,6 +551,7 @@ function handleAppClick(event) {
 }
 
 function shouldIgnorePhaseSwipe(target) {
+  if (!(target instanceof Element)) return true;
   return Boolean(
     target.closest(
       ".chips, .tabs, .bottom-nav, .topbar, button, input, select, textarea, .date-button, .memo-button",
@@ -488,8 +574,19 @@ function filteredFoodsForChild(child) {
     .filter((food) => food.scope === "global" || food.household_id === child.household_id)
     .filter((food) => !phase || food.phase_code === phase.code)
     .filter((food) => !state.categoryFilter || food.category_code === state.categoryFilter)
+    .filter((food) => recordMatchesStatus(recordFor(food.id), state.statusFilter))
     .filter((food) => !query || food.name.toLowerCase().includes(query) || food.code.includes(query))
     .sort(foodSorter);
+}
+
+function recordMatchesStatus(record, filter) {
+  if (!filter) return true;
+  const first = Boolean(record?.first_date);
+  const second = Boolean(record?.second_date);
+  if (filter === "none") return !first && !second;
+  if (filter === "first") return first && !second;
+  if (filter === "second") return second;
+  return true;
 }
 
 function renderRecordList(foods) {
