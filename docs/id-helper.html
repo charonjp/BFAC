@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ID変換ヘルパー</title>
+    <style>
+      body {
+        max-width: 640px;
+        margin: 40px auto;
+        padding: 0 16px;
+        font-family: system-ui, sans-serif;
+        background: #fff8f0;
+        color: #28201d;
+      }
+      input,
+      output {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 44px;
+        margin-top: 8px;
+        border: 1px solid #ded4cc;
+        border-radius: 8px;
+        background: white;
+        padding: 10px 12px;
+        overflow-wrap: anywhere;
+      }
+      label {
+        display: block;
+        margin-top: 16px;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ID変換ヘルパー</h1>
+    <p>最初の管理者をSupabase Dashboardで作るとき、このメールアドレスを使います。</p>
+    <label>
+      ログインID
+      <input id="login-id" maxlength="12" placeholder="例: admin" />
+    </label>
+    <label>
+      Supabase Authに登録するメールアドレス
+      <output id="email"></output>
+    </label>
+    <script>
+      const input = document.querySelector("#login-id");
+      const output = document.querySelector("#email");
+      input.addEventListener("input", () => {
+        const value = input.value.trim();
+        if (!/^[A-Za-z0-9._-]{1,12}$/.test(value)) {
+          output.textContent = "IDは12文字以内の英数字と . _ - で入力してください";
+          return;
+        }
+        const bytes = new TextEncoder().encode(value);
+        let binary = "";
+        bytes.forEach((byte) => {
+          binary += String.fromCharCode(byte);
+        });
+        const encoded = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+        output.textContent = `u-${encoded}@baby-allergy.local`;
+      });
+    </script>
+  </body>
+</html>

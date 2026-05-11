@@ -1,0 +1,4 @@
+project_id = "baby-allergy-check"
+
+[functions.admin-create-user]
+verify_jwt = false

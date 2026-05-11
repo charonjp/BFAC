@@ -1,0 +1,8 @@
+{
+  "name": "離乳食アレルギーチェック",
+  "short_name": "離乳食チェック",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fff8f0",
+  "theme_color": "#fff8f0"
+}
