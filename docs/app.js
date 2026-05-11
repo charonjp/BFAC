@@ -1437,17 +1437,20 @@ async function exportPdf() {
     const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
     const pageWidth = 210;
     const pageHeight = 297;
-    const imageHeight = (canvas.height * pageWidth) / canvas.width;
+    const printMargin = 12;
+    const printableWidth = pageWidth - printMargin * 2;
+    const printableHeight = pageHeight - printMargin * 2;
+    const imageHeight = (canvas.height * printableWidth) / canvas.width;
     let heightLeft = imageHeight;
-    let position = 0;
+    let position = printMargin;
 
-    pdf.addImage(image, "PNG", 0, position, pageWidth, imageHeight);
-    heightLeft -= pageHeight;
+    pdf.addImage(image, "PNG", printMargin, position, printableWidth, imageHeight);
+    heightLeft -= printableHeight;
     while (heightLeft > 0) {
-      position -= pageHeight;
+      position -= printableHeight;
       pdf.addPage();
-      pdf.addImage(image, "PNG", 0, position, pageWidth, imageHeight);
-      heightLeft -= pageHeight;
+      pdf.addImage(image, "PNG", printMargin, position, printableWidth, imageHeight);
+      heightLeft -= printableHeight;
     }
     pdf.save(`baby_allergy_${safeFileName(child.name)}_${todayIso()}.pdf`);
   } finally {
