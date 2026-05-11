@@ -1433,24 +1433,46 @@ async function exportPdf() {
   try {
     const paper = container.querySelector(".report-paper");
     const canvas = await window.html2canvas(paper, { scale: 2, backgroundColor: "#ffffff" });
-    const image = canvas.toDataURL("image/png");
     const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
     const pageWidth = 210;
     const pageHeight = 297;
-    const printMargin = 12;
+    const printMargin = 14;
     const printableWidth = pageWidth - printMargin * 2;
     const printableHeight = pageHeight - printMargin * 2;
-    const imageHeight = (canvas.height * printableWidth) / canvas.width;
-    let heightLeft = imageHeight;
-    let position = printMargin;
+    const pageSliceHeightPx = Math.floor((printableHeight * canvas.width) / printableWidth);
+    const sliceCanvas = document.createElement("canvas");
+    const sliceContext = sliceCanvas.getContext("2d");
+    if (!sliceContext) {
+      throw new Error("PDF用の画像処理を開始できませんでした");
+    }
+    sliceCanvas.width = canvas.width;
 
-    pdf.addImage(image, "PNG", printMargin, position, printableWidth, imageHeight);
-    heightLeft -= printableHeight;
-    while (heightLeft > 0) {
-      position -= printableHeight;
-      pdf.addPage();
-      pdf.addImage(image, "PNG", printMargin, position, printableWidth, imageHeight);
-      heightLeft -= printableHeight;
+    for (let sourceY = 0, pageIndex = 0; sourceY < canvas.height; sourceY += pageSliceHeightPx, pageIndex += 1) {
+      const sliceHeightPx = Math.min(pageSliceHeightPx, canvas.height - sourceY);
+      sliceCanvas.height = sliceHeightPx;
+      sliceContext.clearRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+      sliceContext.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        sliceHeightPx,
+        0,
+        0,
+        canvas.width,
+        sliceHeightPx,
+      );
+
+      if (pageIndex > 0) pdf.addPage();
+      const sliceHeightMm = (sliceHeightPx * printableWidth) / canvas.width;
+      pdf.addImage(
+        sliceCanvas.toDataURL("image/png"),
+        "PNG",
+        printMargin,
+        printMargin,
+        printableWidth,
+        sliceHeightMm,
+      );
     }
     pdf.save(`baby_allergy_${safeFileName(child.name)}_${todayIso()}.pdf`);
   } finally {
