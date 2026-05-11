@@ -23,11 +23,16 @@ const STATUS_FILTERS = [
   { value: "first", label: "1回完了" },
   { value: "second", label: "2回完了" },
 ];
+const LOAD_TIMEOUT_MS = 20000;
 
 let supabaseClient = null;
 let touchGesture = null;
 let horizontalScrollGesture = null;
 let suppressHorizontalClick = false;
+let activeLoadId = 0;
+let hasLoadedOnce = false;
+let initialSessionHandled = false;
+let resumeRefreshTimer = null;
 
 const state = {
   session: null,
@@ -72,19 +77,26 @@ async function init() {
   supabaseClient = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
   const { data } = await supabaseClient.auth.getSession();
   state.session = data.session;
+  initialSessionHandled = true;
 
-  supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+  supabaseClient.auth.onAuthStateChange((event, session) => {
     state.session = session;
-    if (session) {
-      await loadAll();
-    } else {
+    if (!session) {
       resetState();
       renderLogin();
+    } else if (event === "INITIAL_SESSION" && initialSessionHandled) {
+      return;
+    } else if (!hasLoadedOnce) {
+      runAsync(() => loadAll({ showLoading: true }));
+    } else if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+      runAsync(() => loadAll({ showLoading: false }));
     }
   });
 
+  bindPageResumeHandlers();
+
   if (state.session) {
-    await loadAll();
+    await loadAll({ showLoading: true });
   } else {
     renderLogin();
   }
@@ -108,25 +120,104 @@ function resetState() {
   state.settingsSection = "menu";
 }
 
-async function loadAll() {
-  state.loading = true;
-  renderLoading();
+async function loadAll({ showLoading = !hasLoadedOnce } = {}) {
+  const loadId = ++activeLoadId;
+  if (showLoading && !hasLoadedOnce) {
+    state.loading = true;
+    renderLoading();
+  } else {
+    state.loading = false;
+  }
+
   try {
-    await loadProfile();
-    await Promise.all([loadMasters(), loadHouseholds(), loadChildren(), loadFoods()]);
-    ensureSelectedChild();
-    await loadRecords();
-    if (isAdmin()) {
-      await loadProfiles();
-      state.foodScope = "global";
-    }
+    await withTimeout(loadAllSteps(loadId), LOAD_TIMEOUT_MS, "データ読み込み");
+    if (loadId !== activeLoadId) return;
+    hasLoadedOnce = true;
     state.loading = false;
     render();
   } catch (error) {
+    if (loadId !== activeLoadId) return;
+    activeLoadId += 1;
     state.loading = false;
     showToast(error.message || "読み込みに失敗しました");
-    renderLogin();
+    if (hasLoadedOnce && state.profile) {
+      render();
+    } else {
+      renderLogin();
+    }
   }
+}
+
+async function loadAllSteps(loadId) {
+    await loadProfile();
+    ensureActiveLoad(loadId);
+    await Promise.all([loadMasters(), loadHouseholds(), loadChildren(), loadFoods()]);
+    ensureActiveLoad(loadId);
+    ensureSelectedChild();
+    await loadRecords();
+    ensureActiveLoad(loadId);
+    if (isAdmin()) {
+      await loadProfiles();
+      ensureActiveLoad(loadId);
+      state.foodScope = "global";
+    }
+}
+
+function ensureActiveLoad(loadId) {
+  if (loadId !== activeLoadId) {
+    throw new Error("stale-load");
+  }
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(`${label}がタイムアウトしました。通信状態を確認して、必要ならページを更新してください。`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+  });
+}
+
+function bindPageResumeHandlers() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleResumeRefresh();
+  });
+  window.addEventListener("pageshow", () => {
+    scheduleResumeRefresh();
+  });
+  window.addEventListener("focus", () => {
+    scheduleResumeRefresh();
+  });
+}
+
+function scheduleResumeRefresh() {
+  if (!state.session) return;
+  if (state.loading && hasLoadedOnce) {
+    state.loading = false;
+    render();
+  }
+  if (!hasLoadedOnce) return;
+  window.clearTimeout(resumeRefreshTimer);
+  resumeRefreshTimer = window.setTimeout(() => {
+    runAsync(async () => {
+      const { data, error } = await withTimeout(
+        supabaseClient.auth.getSession(),
+        8000,
+        "セッション確認",
+      );
+      if (error) throw error;
+      state.session = data.session;
+      if (!state.session) {
+        resetState();
+        renderLogin();
+        return;
+      }
+      await loadAll({ showLoading: false });
+    });
+  }, 350);
 }
 
 async function loadProfile() {
@@ -236,7 +327,7 @@ function render() {
     renderLogin();
     return;
   }
-  if (state.loading) {
+  if (state.loading && !hasLoadedOnce) {
     renderLoading();
     return;
   }
