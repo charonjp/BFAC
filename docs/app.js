@@ -19,7 +19,7 @@ const ATTEMPTS = {
 };
 
 let supabaseClient = null;
-let touchStartX = 0;
+let touchGesture = null;
 
 const state = {
   session: null,
@@ -43,6 +43,16 @@ const state = {
 };
 
 init();
+
+window.addEventListener("error", (event) => {
+  showToast(event.message || "ブラウザエラーが発生しました");
+  event.preventDefault();
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  showToast(event.reason?.message || "通信または処理中にエラーが発生しました");
+  event.preventDefault();
+});
 
 async function init() {
   if (!config.SUPABASE_URL || !config.SUPABASE_ANON_KEY || config.SUPABASE_URL.includes("YOUR_")) {
@@ -114,8 +124,12 @@ async function loadProfile() {
     .from("profiles")
     .select("*, households(name)")
     .eq("id", state.session.user.id)
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) {
+    await supabaseClient.auth.signOut();
+    throw new Error("ログイン用ユーザは存在しますが、プロフィールが未作成です。WEB_DEPLOY.mdの「管理者ログインできない時の修復」を確認してください。");
+  }
   if (!data.is_active) {
     await supabaseClient.auth.signOut();
     throw new Error("このユーザは停止されています");
@@ -217,15 +231,29 @@ function render() {
     return;
   }
 
+  clearAppHandlers();
   if (state.view === "settings") renderSettings();
   else if (state.view === "admin") renderAdmin();
   else renderMain();
 }
 
-function renderLoading() {
+function clearAppHandlers() {
   app.onclick = null;
   app.ontouchstart = null;
   app.ontouchend = null;
+  touchGesture = null;
+}
+
+function runAsync(task) {
+  Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      showToast(error?.message || "処理に失敗しました");
+    });
+}
+
+function renderLoading() {
+  clearAppHandlers();
   app.innerHTML = `
     <main class="login-panel">
       <h1>読み込み中</h1>
@@ -235,9 +263,7 @@ function renderLoading() {
 }
 
 function renderConfigMissing() {
-  app.onclick = null;
-  app.ontouchstart = null;
-  app.ontouchend = null;
+  clearAppHandlers();
   app.innerHTML = `
     <main class="login-panel">
       <h1>設定が必要です</h1>
@@ -248,9 +274,7 @@ function renderConfigMissing() {
 }
 
 function renderLogin() {
-  app.onclick = null;
-  app.ontouchstart = null;
-  app.ontouchend = null;
+  clearAppHandlers();
   app.innerHTML = `
     <main class="login-panel">
       <h1>${escapeHtml(config.APP_NAME || "離乳食アレルギーチェック")}</h1>
@@ -270,26 +294,28 @@ function renderLogin() {
     </main>
   `;
 
-  document.querySelector("#login-form").addEventListener("submit", async (event) => {
+  document.querySelector("#login-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const loginId = String(form.get("login_id") || "").trim();
-    const password = String(form.get("password") || "");
-    const message = document.querySelector("#login-message");
-    message.textContent = "";
+    runAsync(async () => {
+      const form = new FormData(event.currentTarget);
+      const loginId = String(form.get("login_id") || "").trim();
+      const password = String(form.get("password") || "");
+      const message = document.querySelector("#login-message");
+      message.textContent = "";
 
-    if (!ID_PATTERN.test(loginId)) {
-      message.textContent = "IDは12文字以内の英数字と . _ - で入力してください。";
-      return;
-    }
+      if (!ID_PATTERN.test(loginId)) {
+        message.textContent = "IDは12文字以内の英数字と . _ - で入力してください。";
+        return;
+      }
 
-    const { error } = await supabaseClient.auth.signInWithPassword({
-      email: loginIdToEmail(loginId),
-      password,
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email: loginIdToEmail(loginId),
+        password,
+      });
+      if (error) {
+        message.textContent = "IDまたはパスワードが違います。";
+      }
     });
-    if (error) {
-      message.textContent = "IDまたはパスワードが違います。";
-    }
   });
 }
 
@@ -366,10 +392,12 @@ function renderMainContent(child, phase) {
 }
 
 function bindMainEvents() {
-  document.querySelector("#child-select")?.addEventListener("change", async (event) => {
-    state.selectedChildId = event.target.value;
-    await loadRecords();
-    render();
+  document.querySelector("#child-select")?.addEventListener("change", (event) => {
+    runAsync(async () => {
+      state.selectedChildId = event.target.value;
+      await loadRecords();
+      render();
+    });
   });
   document.querySelector("#search-input")?.addEventListener("input", (event) => {
     state.search = event.target.value;
@@ -380,12 +408,25 @@ function bindMainEvents() {
 
   app.onclick = handleAppClick;
   app.ontouchstart = (event) => {
-    touchStartX = event.changedTouches[0].clientX;
+    const touch = event.changedTouches[0];
+    touchGesture = {
+      x: touch.clientX,
+      y: touch.clientY,
+      ignorePhaseSwipe: shouldIgnorePhaseSwipe(event.target),
+    };
   };
   app.ontouchend = (event) => {
-    const diff = event.changedTouches[0].clientX - touchStartX;
-    if (Math.abs(diff) > 70) {
-      if (diff < 0) changePhase(1);
+    if (!touchGesture) return;
+    if (touchGesture.ignorePhaseSwipe) {
+      touchGesture = null;
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const diffX = touch.clientX - touchGesture.x;
+    const diffY = touch.clientY - touchGesture.y;
+    touchGesture = null;
+    if (Math.abs(diffX) > 80 && Math.abs(diffX) > Math.abs(diffY) * 1.4) {
+      if (diffX < 0) changePhase(1);
       else changePhase(-1);
     }
   };
@@ -395,31 +436,41 @@ function handleAppClick(event) {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
-  if (action === "settings") {
-    state.view = "settings";
-    state.settingsSection = "menu";
-    render();
-  } else if (action === "home") {
-    state.view = "main";
-    render();
-  } else if (action === "admin") {
-    state.view = "admin";
-    render();
-  } else if (action === "phase") {
-    state.phaseIndex = Number(button.dataset.index);
-    render();
-  } else if (action === "category") {
-    state.categoryFilter = button.dataset.code || "";
-    render();
-  } else if (action === "edit-date") {
-    openDateModal(button.dataset.foodId, Number(button.dataset.attempt));
-  } else if (action === "edit-memo") {
-    openMemoModal(button.dataset.foodId, Number(button.dataset.attempt));
-  } else if (action === "open-child-create") {
-    openChildModal();
-  } else if (action === "logout") {
-    supabaseClient.auth.signOut();
-  }
+  runAsync(async () => {
+    if (action === "settings") {
+      state.view = "settings";
+      state.settingsSection = "menu";
+      render();
+    } else if (action === "home") {
+      state.view = "main";
+      render();
+    } else if (action === "admin") {
+      state.view = "admin";
+      render();
+    } else if (action === "phase") {
+      state.phaseIndex = Number(button.dataset.index);
+      render();
+    } else if (action === "category") {
+      state.categoryFilter = button.dataset.code || "";
+      render();
+    } else if (action === "edit-date") {
+      openDateModal(button.dataset.foodId, Number(button.dataset.attempt));
+    } else if (action === "edit-memo") {
+      openMemoModal(button.dataset.foodId, Number(button.dataset.attempt));
+    } else if (action === "open-child-create") {
+      openChildModal();
+    } else if (action === "logout") {
+      await supabaseClient.auth.signOut();
+    }
+  });
+}
+
+function shouldIgnorePhaseSwipe(target) {
+  return Boolean(
+    target.closest(
+      ".chips, .tabs, .bottom-nav, .topbar, button, input, select, textarea, .date-button, .memo-button",
+    ),
+  );
 }
 
 function changePhase(direction) {
@@ -498,8 +549,6 @@ function renderAttempt(foodId, record, attempt) {
 }
 
 function renderSettings() {
-  app.ontouchstart = null;
-  app.ontouchend = null;
   const title =
     state.settingsSection === "menu"
       ? "設定"
@@ -536,7 +585,7 @@ function renderSettingsMenu() {
         isAdmin()
           ? `<button class="settings-card" data-action="settings-masters">
               <h2>期・分類マスタ</h2>
-              <p>初期、中期、後期と分類名、表示順を編集します。</p>
+              <p>初期、中期、後期、完了期と分類名、表示順を編集します。</p>
             </button>`
           : ""
       }
@@ -585,7 +634,7 @@ function renderPhaseCategoryMaster() {
     <section class="settings-grid">
       <div class="settings-card">
         <h2>期</h2>
-        <p>例: 初期、中期、後期。コードは2桁です。</p>
+        <p>例: 初期、中期、後期、完了期。コードは2桁です。</p>
         <button class="secondary-button" data-action="create-phase" style="margin-top: 10px;">期を追加</button>
         <div class="master-list">
           ${state.phases.map(renderPhaseItem).join("")}
@@ -689,53 +738,55 @@ function bindSettingsEvents() {
     render();
   });
 
-  app.onclick = async (event) => {
+  app.onclick = (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
-    if (action === "home") {
-      state.view = "main";
-      render();
-    } else if (action === "settings") {
-      state.settingsSection = "menu";
-      render();
-    } else if (action === "settings-children") {
-      state.settingsSection = "children";
-      render();
-    } else if (action === "settings-foods") {
-      state.settingsSection = "foods";
-      render();
-    } else if (action === "settings-masters") {
-      state.settingsSection = "masters";
-      render();
-    } else if (action === "create-child") {
-      openChildModal();
-    } else if (action === "edit-child") {
-      openChildModal(state.children.find((child) => child.id === button.dataset.id));
-    } else if (action === "delete-child") {
-      await deleteChild(button.dataset.id);
-    } else if (action === "create-food") {
-      openFoodModal();
-    } else if (action === "edit-food") {
-      openFoodModal(state.foods.find((food) => food.id === button.dataset.id));
-    } else if (action === "create-phase") {
-      openPhaseModal();
-    } else if (action === "edit-phase") {
-      openPhaseModal(state.phases.find((phase) => phase.code === button.dataset.code));
-    } else if (action === "create-category-master") {
-      openCategoryMasterModal();
-    } else if (action === "edit-category-master") {
-      openCategoryMasterModal(state.categories.find((category) => category.code === button.dataset.code));
-    } else if (action === "export-csv") {
-      exportCsv();
-    } else if (action === "export-pdf") {
-      exportPdf();
-    } else if (action === "admin") {
-      state.view = "admin";
-      render();
-    } else if (action === "logout") {
-      await supabaseClient.auth.signOut();
-    }
+    runAsync(async () => {
+      if (action === "home") {
+        state.view = "main";
+        render();
+      } else if (action === "settings") {
+        state.settingsSection = "menu";
+        render();
+      } else if (action === "settings-children") {
+        state.settingsSection = "children";
+        render();
+      } else if (action === "settings-foods") {
+        state.settingsSection = "foods";
+        render();
+      } else if (action === "settings-masters") {
+        state.settingsSection = "masters";
+        render();
+      } else if (action === "create-child") {
+        openChildModal();
+      } else if (action === "edit-child") {
+        openChildModal(state.children.find((child) => child.id === button.dataset.id));
+      } else if (action === "delete-child") {
+        await deleteChild(button.dataset.id);
+      } else if (action === "create-food") {
+        openFoodModal();
+      } else if (action === "edit-food") {
+        openFoodModal(state.foods.find((food) => food.id === button.dataset.id));
+      } else if (action === "create-phase") {
+        openPhaseModal();
+      } else if (action === "edit-phase") {
+        openPhaseModal(state.phases.find((phase) => phase.code === button.dataset.code));
+      } else if (action === "create-category-master") {
+        openCategoryMasterModal();
+      } else if (action === "edit-category-master") {
+        openCategoryMasterModal(state.categories.find((category) => category.code === button.dataset.code));
+      } else if (action === "export-csv") {
+        exportCsv();
+      } else if (action === "export-pdf") {
+        await exportPdf();
+      } else if (action === "admin") {
+        state.view = "admin";
+        render();
+      } else if (action === "logout") {
+        await supabaseClient.auth.signOut();
+      }
+    });
   };
 }
 
@@ -837,8 +888,6 @@ function openCategoryMasterModal(category = null) {
 }
 
 function renderAdmin() {
-  app.ontouchstart = null;
-  app.ontouchend = null;
   app.innerHTML = `
     ${renderTopbar("管理者", "‹", "", "")}
     <main class="content">
@@ -863,43 +912,48 @@ function renderAdmin() {
     ${renderBottomNav()}
   `;
 
-  document.querySelector("#admin-user-form")?.addEventListener("submit", async (event) => {
+  document.querySelector("#admin-user-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const payload = {
-      login_id: String(form.get("login_id") || "").trim(),
-      password: String(form.get("password") || ""),
-      display_name: String(form.get("display_name") || "").trim(),
-      household_name: String(form.get("household_name") || "").trim(),
-    };
-    if (!ID_PATTERN.test(payload.login_id)) {
-      showToast("IDは12文字以内の英数字と . _ - で入力してください。");
-      return;
-    }
-    const { error } = await supabaseClient.functions.invoke("admin-create-user", { body: payload });
-    if (error) {
-      showToast(error.message || "ユーザ追加に失敗しました");
-      return;
-    }
-    showToast("ユーザを追加しました");
-    await Promise.all([loadHouseholds(), loadChildren(), loadProfiles()]);
-    event.currentTarget.reset();
-    render();
+    const formElement = event.currentTarget;
+    runAsync(async () => {
+      const form = new FormData(formElement);
+      const payload = {
+        login_id: String(form.get("login_id") || "").trim(),
+        password: String(form.get("password") || ""),
+        display_name: String(form.get("display_name") || "").trim(),
+        household_name: String(form.get("household_name") || "").trim(),
+      };
+      if (!ID_PATTERN.test(payload.login_id)) {
+        showToast("IDは12文字以内の英数字と . _ - で入力してください。");
+        return;
+      }
+      const { error } = await supabaseClient.functions.invoke("admin-create-user", { body: payload });
+      if (error) {
+        showToast(error.message || "ユーザ追加に失敗しました");
+        return;
+      }
+      showToast("ユーザを追加しました");
+      await Promise.all([loadHouseholds(), loadChildren(), loadProfiles()]);
+      formElement.reset();
+      render();
+    });
   });
 
-  app.onclick = async (event) => {
+  app.onclick = (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
-    if (button.dataset.action === "home") {
-      state.view = "main";
-      render();
-    } else if (button.dataset.action === "settings") {
-      state.view = "settings";
-      state.settingsSection = "menu";
-      render();
-    } else if (button.dataset.action === "logout") {
-      await supabaseClient.auth.signOut();
-    }
+    runAsync(async () => {
+      if (button.dataset.action === "home") {
+        state.view = "main";
+        render();
+      } else if (button.dataset.action === "settings") {
+        state.view = "settings";
+        state.settingsSection = "menu";
+        render();
+      } else if (button.dataset.action === "logout") {
+        await supabaseClient.auth.signOut();
+      }
+    });
   };
 }
 

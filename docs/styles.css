@@ -238,8 +238,11 @@ button {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   padding-bottom: 4px;
   scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tabs::-webkit-scrollbar,
